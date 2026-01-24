@@ -20,9 +20,16 @@ DEVICES_PATH = Path(__file__).parent.parent.parent.parent / "devices"
 def _parse_field(name: str, data: dict[str, Any]) -> RegisterField:
     """Parse a register field definition."""
     bit = data.get("bit")
-    bits = data.get("bits")
-    if bits is not None:
-        bits = tuple(bits)  # Convert list to tuple
+    bits_raw = data.get("bits")
+    bits: tuple[int, int] | None = None
+
+    if bits_raw is not None:
+        if len(bits_raw) != 2:
+            raise ValueError(
+                f"Field '{name}' bits must have exactly 2 elements [low, high], "
+                f"got {len(bits_raw)}"
+            )
+        bits = (int(bits_raw[0]), int(bits_raw[1]))
 
     return RegisterField(
         name=name,

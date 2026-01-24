@@ -7,9 +7,47 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from plxtools.backends.pcie_sysfs import PcieSysfsBackend
+from plxtools.backends.pcie_sysfs import PcieSysfsBackend, validate_bdf
 from plxtools.backends.pcie_mmap import PcieMmapBackend
 from plxtools.discovery import PlxDevice, discover_plx_devices, discover_plx_switches
+
+
+class TestBdfValidation:
+    """Tests for BDF format validation (security)."""
+
+    def test_valid_bdf(self) -> None:
+        """Valid BDF formats are accepted."""
+        # Should not raise
+        validate_bdf("0000:03:00.0")
+        validate_bdf("0000:00:00.0")
+        validate_bdf("ffff:ff:ff.f")
+        validate_bdf("ABCD:EF:12.3")
+
+    def test_invalid_bdf_path_traversal(self) -> None:
+        """Path traversal attempts are rejected."""
+        with pytest.raises(ValueError, match="Invalid BDF format"):
+            validate_bdf("../../../etc")
+
+    def test_invalid_bdf_missing_parts(self) -> None:
+        """Incomplete BDF strings are rejected."""
+        with pytest.raises(ValueError, match="Invalid BDF format"):
+            validate_bdf("0000:03:00")
+        with pytest.raises(ValueError, match="Invalid BDF format"):
+            validate_bdf("03:00.0")
+
+    def test_invalid_bdf_wrong_separators(self) -> None:
+        """Wrong separator characters are rejected."""
+        with pytest.raises(ValueError, match="Invalid BDF format"):
+            validate_bdf("0000-03-00.0")
+        with pytest.raises(ValueError, match="Invalid BDF format"):
+            validate_bdf("0000:03:00:0")
+
+    def test_invalid_bdf_non_hex(self) -> None:
+        """Non-hex characters are rejected."""
+        with pytest.raises(ValueError, match="Invalid BDF format"):
+            validate_bdf("ZZZZ:03:00.0")
+        with pytest.raises(ValueError, match="Invalid BDF format"):
+            validate_bdf("0000:GG:00.0")
 
 
 class TestPlxDevice:

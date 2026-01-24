@@ -1,10 +1,27 @@
 """PCIe sysfs backend for config space access."""
 
+import re
 import struct
 from pathlib import Path
 from typing import BinaryIO
 
 from plxtools.backends.base import BaseBackend
+
+# BDF format: DDDD:BB:DD.F (domain:bus:device.function)
+BDF_PATTERN = re.compile(r"^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]$")
+
+
+def validate_bdf(bdf: str) -> None:
+    """Validate BDF format to prevent path traversal attacks.
+
+    Args:
+        bdf: PCI Bus:Device.Function address (e.g., "0000:03:00.0")
+
+    Raises:
+        ValueError: If the BDF format is invalid.
+    """
+    if not BDF_PATTERN.match(bdf):
+        raise ValueError(f"Invalid BDF format: {bdf!r} (expected DDDD:BB:DD.F)")
 
 
 class PcieSysfsBackend(BaseBackend):
@@ -25,7 +42,12 @@ class PcieSysfsBackend(BaseBackend):
 
         Args:
             bdf: PCI Bus:Device.Function address (e.g., "0000:03:00.0")
+
+        Raises:
+            ValueError: If BDF format is invalid.
+            FileNotFoundError: If the device doesn't exist.
         """
+        validate_bdf(bdf)
         self.bdf = bdf
         self._config_path = self.SYSFS_PCI_PATH / bdf / "config"
         self._file: BinaryIO | None = None

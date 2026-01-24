@@ -11,9 +11,11 @@ class RegisterAccess(Protocol):
     All backends must implement this protocol to provide a unified interface
     for reading and writing 32-bit registers regardless of the underlying
     access method (PCIe config space, BAR0 mmap, I2C, etc.).
+
+    This is a structural typing Protocol - classes don't need to explicitly
+    inherit from it, they just need to implement the methods.
     """
 
-    @abstractmethod
     def read32(self, offset: int) -> int:
         """Read a 32-bit register at the given offset.
 
@@ -24,12 +26,11 @@ class RegisterAccess(Protocol):
             The 32-bit register value.
 
         Raises:
-            IOError: If the read operation fails.
+            OSError: If the read operation fails.
             ValueError: If offset is not 4-byte aligned.
         """
         ...
 
-    @abstractmethod
     def write32(self, offset: int, value: int) -> None:
         """Write a 32-bit value to the register at the given offset.
 
@@ -38,18 +39,14 @@ class RegisterAccess(Protocol):
             value: The 32-bit value to write.
 
         Raises:
-            IOError: If the write operation fails.
+            OSError: If the write operation fails.
             ValueError: If offset is not 4-byte aligned or value > 0xFFFFFFFF.
         """
         ...
 
     def close(self) -> None:
-        """Release any resources held by the backend.
-
-        Default implementation does nothing. Backends with resources to release
-        should override this method.
-        """
-        pass
+        """Release any resources held by the backend."""
+        ...
 
 
 class BaseBackend(ABC):

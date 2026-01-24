@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from plxtools.backends.base import BaseBackend
+from plxtools.backends.pcie_sysfs import validate_bdf
 
 
 class PcieMmapBackend(BaseBackend):
@@ -26,7 +27,12 @@ class PcieMmapBackend(BaseBackend):
         Args:
             bdf: PCI Bus:Device.Function address (e.g., "0000:03:00.0")
             size: Size of the region to map (default 4KB, enough for EEPROM regs)
+
+        Raises:
+            ValueError: If BDF format is invalid.
+            FileNotFoundError: If the device doesn't exist.
         """
+        validate_bdf(bdf)
         self.bdf = bdf
         self._size = size
         self._resource_path = self.SYSFS_PCI_PATH / bdf / "resource0"
