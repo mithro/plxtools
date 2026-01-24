@@ -1,4 +1,4 @@
-"""Tests for EEPROM controller."""
+"""Tests for EEPROM controller and decoder."""
 
 import struct
 import tempfile
@@ -7,7 +7,16 @@ from pathlib import Path
 import pytest
 
 from plxtools.backends import MockEepromBackend
-from plxtools.eeprom import EepromController, EepromInfo, read_eeprom
+from plxtools.eeprom import (
+    EepromContents,
+    EepromController,
+    EepromDecoder,
+    EepromInfo,
+    RegisterWrite,
+    decode_eeprom,
+    decode_eeprom_file,
+    read_eeprom,
+)
 
 
 def create_valid_eeprom(payload: bytes | None = None) -> bytes:
@@ -202,3 +211,151 @@ class TestEepromInfo:
         assert info.payload_length == 100
         assert info.address_width == 2
         assert info.total_size == 104
+
+
+class TestEepromDecoder:
+    """Tests for EepromDecoder."""
+
+    def test_decode_valid_eeprom(self) -> None:
+        """Decode valid EEPROM with register writes."""
+        # Create EEPROM with one register write
+        # Port 0, register 0x100, value 0x12345678
+        # Address encoding: (0x100 >> 2) | (0 << 10) = 0x0040
+        payload = struct.pack("<HI", 0x0040, 0x12345678)
+        eeprom_data = create_valid_eeprom(payload)
+
+        decoder = EepromDecoder()
+        contents = decoder.decode(eeprom_data)
+
+        assert contents.valid is True
+        assert contents.signature == 0x5A
+        assert contents.payload_length == 6
+        assert contents.num_writes == 1
+
+        write = contents.register_writes[0]
+        assert write.raw_address == 0x0040
+        assert write.register_offset == 0x100
+        assert write.port == 0
+        assert write.value == 0x12345678
+
+    def test_decode_multiple_writes(self) -> None:
+        """Decode EEPROM with multiple register writes."""
+        # Two writes: port 0 reg 0x100, port 1 reg 0x200
+        write1 = struct.pack("<HI", 0x0040, 0x11111111)  # (0x100 >> 2) | (0 << 10)
+        write2 = struct.pack("<HI", 0x0480, 0x22222222)  # (0x200 >> 2) | (1 << 10)
+        payload = write1 + write2
+        eeprom_data = create_valid_eeprom(payload)
+
+        decoder = EepromDecoder()
+        contents = decoder.decode(eeprom_data)
+
+        assert contents.valid is True
+        assert contents.num_writes == 2
+
+        assert contents.register_writes[0].register_offset == 0x100
+        assert contents.register_writes[0].port == 0
+        assert contents.register_writes[0].value == 0x11111111
+
+        assert contents.register_writes[1].register_offset == 0x200
+        assert contents.register_writes[1].port == 1
+        assert contents.register_writes[1].value == 0x22222222
+
+    def test_decode_invalid_signature(self) -> None:
+        """Decode EEPROM with invalid signature."""
+        data = bytes([0xFF, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+
+        decoder = EepromDecoder()
+        contents = decoder.decode(data)
+
+        assert contents.valid is False
+        assert contents.signature == 0xFF
+
+    def test_decode_empty_data(self) -> None:
+        """Decode empty data."""
+        decoder = EepromDecoder()
+        contents = decoder.decode(b"")
+
+        assert contents.valid is False
+
+    def test_decode_short_data(self) -> None:
+        """Decode data shorter than header."""
+        decoder = EepromDecoder()
+        contents = decoder.decode(bytes([0x5A, 0x00]))
+
+        assert contents.valid is False
+
+    def test_decode_with_device_definition(self) -> None:
+        """Decode with device definition resolves register names."""
+        from plxtools.devices import load_device_by_name
+
+        # Write to eeprom_ctrl register (0x260)
+        # Address encoding: (0x260 >> 2) | (0 << 10) = 0x0098
+        payload = struct.pack("<HI", 0x0098, 0xABCDEF00)
+        eeprom_data = create_valid_eeprom(payload)
+
+        device_def = load_device_by_name("PEX8733")
+        decoder = EepromDecoder(device_def)
+        contents = decoder.decode(eeprom_data)
+
+        assert contents.valid is True
+        write = contents.register_writes[0]
+        assert write.register_offset == 0x260
+        assert write.register_name == "eeprom_ctrl"
+
+    def test_decode_file(self, tmp_path: Path) -> None:
+        """Decode EEPROM from file."""
+        eeprom_data = create_valid_eeprom()
+        eeprom_file = tmp_path / "test.bin"
+        eeprom_file.write_bytes(eeprom_data)
+
+        decoder = EepromDecoder()
+        contents = decoder.decode_file(eeprom_file)
+
+        assert contents.valid is True
+
+    def test_to_json(self) -> None:
+        """Convert decoded contents to JSON."""
+        payload = struct.pack("<HI", 0x0040, 0x12345678)
+        eeprom_data = create_valid_eeprom(payload)
+
+        decoder = EepromDecoder()
+        contents = decoder.decode(eeprom_data)
+        json_str = contents.to_json()
+
+        import json
+        parsed = json.loads(json_str)
+        assert parsed["valid"] is True
+        assert parsed["num_writes"] == 1
+        assert parsed["register_writes"][0]["value"] == "0x12345678"
+
+    def test_format_human_readable(self) -> None:
+        """Format decoded contents as human-readable text."""
+        payload = struct.pack("<HI", 0x0040, 0x12345678)
+        eeprom_data = create_valid_eeprom(payload)
+
+        decoder = EepromDecoder()
+        contents = decoder.decode(eeprom_data)
+        text = decoder.format_human_readable(contents)
+
+        assert "EEPROM Contents" in text
+        assert "Valid:" in text
+        assert "0x12345678" in text
+
+
+class TestDecodeConvenienceFunctions:
+    """Tests for decode convenience functions."""
+
+    def test_decode_eeprom(self) -> None:
+        """decode_eeprom convenience function."""
+        eeprom_data = create_valid_eeprom()
+        contents = decode_eeprom(eeprom_data)
+        assert contents.valid is True
+
+    def test_decode_eeprom_file(self, tmp_path: Path) -> None:
+        """decode_eeprom_file convenience function."""
+        eeprom_data = create_valid_eeprom()
+        eeprom_file = tmp_path / "test.bin"
+        eeprom_file.write_bytes(eeprom_data)
+
+        contents = decode_eeprom_file(eeprom_file)
+        assert contents.valid is True
