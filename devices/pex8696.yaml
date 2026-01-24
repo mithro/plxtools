@@ -1,0 +1,90 @@
+# PEX8696 - 96-lane, 24-port PCIe Gen3 Switch
+# Broadcom (formerly PLX Technology)
+
+device:
+  vendor_id: 0x10B5
+  device_id: 0x8696
+  name: "PEX8696"
+  description: "96-lane, 24-port PCIe Gen3 Switch"
+
+  # Number of ports and lanes
+  ports: 24
+  lanes: 96
+
+  # PCIe generation
+  pcie_gen: 3
+
+registers:
+  # EEPROM Controller registers (accessible via BAR0)
+  eeprom_ctrl:
+    offset: 0x260
+    size: 4
+    access: rw
+    description: "EEPROM Control Register"
+    fields:
+      address:
+        bits: [0, 12]
+        description: "EEPROM byte address (13-bit)"
+      command:
+        bits: [13, 15]
+        description: "Command bits"
+      busy:
+        bit: 31
+        description: "Operation in progress"
+
+  eeprom_data:
+    offset: 0x264
+    size: 4
+    access: ro
+    description: "EEPROM Data Register"
+    fields:
+      data:
+        bits: [0, 31]
+        description: "Read data (little-endian)"
+
+  # Device Identification
+  vendor_device_id:
+    offset: 0x00
+    size: 4
+    access: ro
+    description: "Vendor and Device ID"
+    fields:
+      vendor_id:
+        bits: [0, 15]
+        description: "PCI Vendor ID (0x10B5 for PLX)"
+      device_id:
+        bits: [16, 31]
+        description: "PCI Device ID"
+
+  # Port Configuration (per-port, add port offset)
+  port_control:
+    offset: 0x208
+    size: 4
+    access: rw
+    description: "Port Control Register"
+    per_port: true
+    port_stride: 0x1000
+    fields:
+      port_enable:
+        bit: 0
+        description: "Port enable"
+      port_type:
+        bits: [1, 2]
+        description: "Port type (0=DS, 1=US, 2=NT)"
+
+eeprom:
+  # EEPROM access parameters
+  ctrl_offset: 0x260
+  data_offset: 0x264
+
+  # Read command pattern
+  read_cmd: 0x00A06000
+
+  # Address mask (13-bit address space)
+  addr_mask: 0x1FFF
+
+  # Signature byte for valid EEPROM
+  signature: 0x5A
+
+  # Maximum EEPROM size in bytes (larger for 96-lane switch)
+  max_size: 16384
