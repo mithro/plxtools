@@ -141,3 +141,24 @@ class TestI2cBackend:
             plx_devices = I2cBackend.find_plx_devices(0)
 
         assert 0x38 in plx_devices
+
+    def test_invalid_bus_number(self) -> None:
+        """Negative bus number raises ValueError."""
+        from plxtools.backends.i2c import I2cBackend
+
+        with pytest.raises(ValueError, match="non-negative"):
+            I2cBackend(-1, 0x38)
+
+    def test_invalid_address_too_low(self) -> None:
+        """Address below 0x08 raises ValueError."""
+        from plxtools.backends.i2c import I2cBackend
+
+        with pytest.raises(ValueError, match="0x08-0x77"):
+            I2cBackend(0, 0x07)
+
+    def test_invalid_address_too_high(self) -> None:
+        """Address above 0x77 raises ValueError."""
+        from plxtools.backends.i2c import I2cBackend
+
+        with pytest.raises(ValueError, match="0x08-0x77"):
+            I2cBackend(0, 0x78)

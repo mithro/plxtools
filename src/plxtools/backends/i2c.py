@@ -29,9 +29,19 @@ class I2cBackend(BaseBackend):
         Args:
             bus: I2C bus number (e.g., 0 for /dev/i2c-0)
             address: 7-bit I2C slave address of the PLX switch
+
+        Raises:
+            ImportError: If smbus2 is not installed.
+            ValueError: If bus number or address is invalid.
         """
         if SMBus is None:
             raise ImportError("smbus2 is required for I2C access")
+
+        if bus < 0:
+            raise ValueError(f"I2C bus number must be non-negative, got {bus}")
+        # Valid 7-bit I2C addresses are 0x08-0x77 (0x00-0x07 and 0x78-0x7F reserved)
+        if address < 0x08 or address > 0x77:
+            raise ValueError(f"I2C address must be 0x08-0x77, got {address:#04x}")
 
         self.bus_number = bus
         self.address = address

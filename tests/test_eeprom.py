@@ -1,18 +1,13 @@
 """Tests for EEPROM controller and decoder."""
 
 import struct
-import tempfile
 from pathlib import Path
-
-import pytest
 
 from plxtools.backends import MockEepromBackend
 from plxtools.eeprom import (
-    EepromContents,
     EepromController,
     EepromDecoder,
     EepromInfo,
-    RegisterWrite,
     decode_eeprom,
     decode_eeprom_file,
     read_eeprom,

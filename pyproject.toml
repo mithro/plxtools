@@ -55,6 +55,15 @@ Issues = "https://github.com/mithro/plxtools/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["src/plxtools"]
 
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
+
+[tool.hatch.build]
+include = [
+    "src/plxtools/**/*.py",
+    "src/plxtools/**/*.yaml",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

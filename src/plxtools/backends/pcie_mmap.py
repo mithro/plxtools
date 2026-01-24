@@ -42,10 +42,18 @@ class PcieMmapBackend(BaseBackend):
         if not self._resource_path.exists():
             raise FileNotFoundError(f"BAR0 resource not found: {bdf}")
 
-        # Check if resource is memory-mapped (not I/O)
+        # Check resource properties
         resource_info = self._read_resource_info(bdf)
-        if resource_info and not resource_info.get("is_memory", True):
-            raise ValueError(f"BAR0 is I/O space, not memory: {bdf}")
+        if resource_info:
+            # Verify BAR0 is memory-mapped (not I/O)
+            if not resource_info.get("is_memory", True):
+                raise ValueError(f"BAR0 is I/O space, not memory: {bdf}")
+            # Validate requested size against actual BAR0 size
+            actual_size = resource_info.get("size", 0)
+            if actual_size > 0 and size > actual_size:
+                raise ValueError(
+                    f"Requested map size {size:#x} exceeds BAR0 size {actual_size:#x}"
+                )
 
     def _read_resource_info(self, bdf: str) -> dict[str, int | bool] | None:
         """Read BAR0 resource information from sysfs."""

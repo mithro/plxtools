@@ -12,6 +12,17 @@ class RegisterField:
     bit: int | None = None  # Single bit
     bits: tuple[int, int] | None = None  # Bit range [low, high]
 
+    def __post_init__(self) -> None:
+        """Validate that exactly one of bit or bits is specified."""
+        if self.bit is None and self.bits is None:
+            raise ValueError(
+                f"RegisterField '{self.name}' must specify either 'bit' or 'bits'"
+            )
+        if self.bit is not None and self.bits is not None:
+            raise ValueError(
+                f"RegisterField '{self.name}' cannot specify both 'bit' and 'bits'"
+            )
+
     @property
     def mask(self) -> int:
         """Calculate the bitmask for this field."""

@@ -1,5 +1,6 @@
 """Load device definitions from YAML files."""
 
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -13,8 +14,17 @@ from plxtools.devices.base import (
     RegisterField,
 )
 
-# Default path for device definitions (relative to package)
-DEVICES_PATH = Path(__file__).parent.parent.parent.parent / "devices"
+# Device definitions are stored in the 'definitions' subdirectory
+_DEFINITIONS_PACKAGE = "plxtools.devices.definitions"
+
+
+def _get_definitions_path() -> Path:
+    """Get the path to device definitions directory.
+
+    Uses importlib.resources for proper package resource access,
+    which works both in development and when installed as a wheel.
+    """
+    return Path(str(files(_DEFINITIONS_PACKAGE)))
 
 
 def _parse_field(name: str, data: dict[str, Any]) -> RegisterField:
@@ -124,10 +134,10 @@ def load_device_by_id(vendor_id: int, device_id: int) -> DeviceDefinition | None
     Returns:
         DeviceDefinition if found, None otherwise.
     """
-    if not DEVICES_PATH.exists():
+    if not _get_definitions_path().exists():
         return None
 
-    for yaml_file in DEVICES_PATH.glob("*.yaml"):
+    for yaml_file in _get_definitions_path().glob("*.yaml"):
         try:
             definition = load_device_definition(yaml_file)
             if (
@@ -151,7 +161,7 @@ def load_device_by_name(name: str) -> DeviceDefinition | None:
         DeviceDefinition if found, None otherwise.
     """
     # Try direct file lookup first
-    yaml_file = DEVICES_PATH / f"{name.lower()}.yaml"
+    yaml_file = _get_definitions_path() / f"{name.lower()}.yaml"
     if yaml_file.exists():
         try:
             return load_device_definition(yaml_file)
@@ -159,10 +169,10 @@ def load_device_by_name(name: str) -> DeviceDefinition | None:
             pass
 
     # Fall back to searching all files
-    if not DEVICES_PATH.exists():
+    if not _get_definitions_path().exists():
         return None
 
-    for yaml_file in DEVICES_PATH.glob("*.yaml"):
+    for yaml_file in _get_definitions_path().glob("*.yaml"):
         try:
             definition = load_device_definition(yaml_file)
             if definition.info.name.upper() == name.upper():
@@ -181,10 +191,10 @@ def list_available_devices() -> list[str]:
     """
     devices: list[str] = []
 
-    if not DEVICES_PATH.exists():
+    if not _get_definitions_path().exists():
         return devices
 
-    for yaml_file in DEVICES_PATH.glob("*.yaml"):
+    for yaml_file in _get_definitions_path().glob("*.yaml"):
         try:
             definition = load_device_definition(yaml_file)
             devices.append(definition.info.name)

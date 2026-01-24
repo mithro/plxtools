@@ -1,19 +1,16 @@
 """Tests for device definitions and loader."""
 
-from pathlib import Path
 
 import pytest
 
 from plxtools.devices import (
-    DeviceDefinition,
     Register,
     RegisterField,
     list_available_devices,
     load_device_by_id,
     load_device_by_name,
-    load_device_definition,
 )
-from plxtools.devices.loader import DEVICES_PATH
+from plxtools.devices.loader import _get_definitions_path
 
 
 class TestRegisterField:
@@ -65,6 +62,16 @@ class TestRegisterField:
         field = RegisterField(name="address", description="", bits=(0, 12))
         assert field.insert(0x00A06000, 0x100) == 0x00A06100
 
+    def test_missing_bit_and_bits_raises(self) -> None:
+        """RegisterField requires either bit or bits."""
+        with pytest.raises(ValueError, match="must specify either"):
+            RegisterField(name="bad", description="")
+
+    def test_both_bit_and_bits_raises(self) -> None:
+        """RegisterField cannot have both bit and bits."""
+        with pytest.raises(ValueError, match="cannot specify both"):
+            RegisterField(name="bad", description="", bit=0, bits=(0, 7))
+
 
 class TestRegister:
     """Tests for Register."""
@@ -104,8 +111,9 @@ class TestDeviceLoader:
 
     def test_devices_path_exists(self) -> None:
         """The devices directory exists."""
-        assert DEVICES_PATH.exists()
-        assert DEVICES_PATH.is_dir()
+        definitions_path = _get_definitions_path()
+        assert definitions_path.exists()
+        assert definitions_path.is_dir()
 
     def test_load_pex8733(self) -> None:
         """Load PEX8733 device definition."""

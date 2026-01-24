@@ -209,7 +209,7 @@ def interactive_shell() -> None:
         from IPython import start_ipython
     except ImportError:
         click.echo("Error: IPython is required for interactive shell.", err=True)
-        click.echo("Install with: pip install ipython", err=True)
+        click.echo("Install with: uv pip install ipython", err=True)
         sys.exit(1)
 
     # Pre-import useful modules

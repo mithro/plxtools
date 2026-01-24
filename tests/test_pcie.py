@@ -1,14 +1,13 @@
 """Tests for PCIe backends and discovery."""
 
 import struct
-import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from plxtools.backends.pcie_sysfs import PcieSysfsBackend, validate_bdf
 from plxtools.backends.pcie_mmap import PcieMmapBackend
+from plxtools.backends.pcie_sysfs import PcieSysfsBackend, validate_bdf
 from plxtools.discovery import PlxDevice, discover_plx_devices, discover_plx_switches
 
 

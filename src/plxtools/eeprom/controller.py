@@ -80,6 +80,9 @@ class EepromController:
 
         Returns:
             32-bit value read from EEPROM (little-endian).
+
+        Raises:
+            TimeoutError: If the EEPROM read does not complete within timeout.
         """
         # Mask address to valid range
         addr = addr & self._addr_mask
@@ -95,6 +98,10 @@ class EepromController:
             if (status & 0x80000000) == 0:  # Busy bit clear
                 break
             time.sleep(0.001)
+        else:
+            raise TimeoutError(
+                f"EEPROM read timeout at address {addr:#x}: busy bit did not clear"
+            )
 
         # Read data
         return self.backend.read32(self._data_offset)
