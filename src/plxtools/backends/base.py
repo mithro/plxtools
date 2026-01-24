@@ -3,6 +3,8 @@
 from abc import ABC, abstractmethod
 from typing import Protocol, runtime_checkable
 
+from typing_extensions import Self
+
 
 @runtime_checkable
 class RegisterAccess(Protocol):
@@ -85,7 +87,7 @@ class BaseBackend(ABC):
         Subclasses with resources to release should override this.
         """
 
-    def __enter__(self) -> "BaseBackend":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type: type | None, exc_val: Exception | None, exc_tb: object) -> None:

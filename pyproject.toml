@@ -31,6 +31,7 @@ dependencies = [
     "click>=8.0",
     "pyyaml>=6.0",
     "smbus2>=0.4",
+    "typing_extensions>=4.0",
 ]
 
 [project.optional-dependencies]
