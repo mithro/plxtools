@@ -29,6 +29,7 @@ classifiers = [
 ]
 dependencies = [
     "click>=8.0",
+    "pyserial>=3.5",
     "pyyaml>=6.0",
     "smbus2>=0.4",
     "typing_extensions>=4.0",
@@ -42,6 +43,7 @@ dev = [
     "ruff",
     "ipython",
     "types-PyYAML",
+    "types-pyserial",
 ]
 
 [project.scripts]

@@ -1,5 +1,8 @@
 """Auto-discovery of PLX switches in the system."""
 
+from __future__ import annotations
+
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -122,3 +125,190 @@ def discover_plx_switches() -> list[PlxDevice]:
         List of PlxDevice objects for PCIe switches only.
     """
     return [d for d in discover_plx_devices() if d.is_switch]
+
+
+# --- Serial device discovery ---
+
+# Known USB vendor/product IDs for PLX serial management interfaces
+# Hitachi is the USB vendor for Serial Cables ATLAS HOST CARD
+SERIAL_USB_VENDOR_HITACHI = 0x045B
+SERIAL_USB_PRODUCT_ATLAS = 0x5300
+
+
+@dataclass
+class SerialPlxDevice:
+    """Information about a PLX switch accessible via serial interface."""
+
+    device_path: str
+    usb_vendor_id: int
+    usb_product_id: int
+    serial_number: str | None
+    model: str | None
+
+    @property
+    def is_atlas(self) -> bool:
+        """Check if this is a Serial Cables ATLAS HOST CARD."""
+        return (
+            self.usb_vendor_id == SERIAL_USB_VENDOR_HITACHI
+            and self.usb_product_id == SERIAL_USB_PRODUCT_ATLAS
+        )
+
+
+def _read_sysfs_text(path: Path) -> str | None:
+    """Read text from a sysfs file."""
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return None
+
+
+def _get_usb_ids_for_tty(device_path: str) -> tuple[int, int] | None:
+    """Get USB vendor/product IDs for a tty device.
+
+    Follows the sysfs symlinks to find the parent USB device.
+
+    Args:
+        device_path: Path like "/dev/ttyACM0"
+
+    Returns:
+        Tuple of (vendor_id, product_id) or None if not found.
+    """
+    # Get the device name (e.g., "ttyACM0")
+    device_name = Path(device_path).name
+
+    # Find the sysfs path for this device
+    sysfs_tty = Path(f"/sys/class/tty/{device_name}")
+    if not sysfs_tty.exists():
+        return None
+
+    # Follow "device" symlink to get to the USB interface
+    device_link = sysfs_tty / "device"
+    if not device_link.exists():
+        return None
+
+    # Walk up the directory tree looking for idVendor/idProduct
+    current = device_link.resolve()
+    while current != Path("/"):
+        vendor_file = current / "idVendor"
+        product_file = current / "idProduct"
+
+        if vendor_file.exists() and product_file.exists():
+            vendor_str = _read_sysfs_text(vendor_file)
+            product_str = _read_sysfs_text(product_file)
+
+            if vendor_str and product_str:
+                try:
+                    return (int(vendor_str, 16), int(product_str, 16))
+                except ValueError:
+                    return None
+
+        current = current.parent
+
+    return None
+
+
+def _get_usb_serial_number(device_path: str) -> str | None:
+    """Get USB serial number for a tty device."""
+    device_name = Path(device_path).name
+    sysfs_tty = Path(f"/sys/class/tty/{device_name}")
+
+    if not sysfs_tty.exists():
+        return None
+
+    device_link = sysfs_tty / "device"
+    if not device_link.exists():
+        return None
+
+    # Walk up looking for serial file
+    current = device_link.resolve()
+    while current != Path("/"):
+        serial_file = current / "serial"
+        if serial_file.exists():
+            return _read_sysfs_text(serial_file)
+        current = current.parent
+
+    return None
+
+
+def discover_serial_devices(
+    *,
+    probe: bool = False,
+) -> list[SerialPlxDevice]:
+    """Discover PLX switches accessible via USB serial interfaces.
+
+    Scans /dev/ttyACM* for devices with known USB vendor/product IDs
+    that correspond to PLX switch management interfaces.
+
+    Args:
+        probe: If True, attempt to probe each device with "ver" command
+               to confirm it's a PLX switch and get model info.
+               This opens the serial port and may take time.
+
+    Returns:
+        List of SerialPlxDevice objects for each discovered device.
+    """
+    devices: list[SerialPlxDevice] = []
+
+    # Scan /dev/ttyACM* devices
+    dev_path = Path("/dev")
+    if not dev_path.exists():
+        return devices
+
+    tty_pattern = re.compile(r"^ttyACM\d+$")
+
+    for entry in sorted(dev_path.iterdir()):
+        if not tty_pattern.match(entry.name):
+            continue
+
+        device_path = str(entry)
+
+        # Get USB IDs
+        usb_ids = _get_usb_ids_for_tty(device_path)
+        if usb_ids is None:
+            continue
+
+        vendor_id, product_id = usb_ids
+
+        # Filter by known PLX management interface USB IDs
+        if vendor_id != SERIAL_USB_VENDOR_HITACHI:
+            continue
+        if product_id != SERIAL_USB_PRODUCT_ATLAS:
+            continue
+
+        serial_number = _get_usb_serial_number(device_path)
+        model: str | None = None
+
+        # Optionally probe to get model info
+        if probe:
+            model = _probe_serial_device_model(device_path)
+
+        devices.append(
+            SerialPlxDevice(
+                device_path=device_path,
+                usb_vendor_id=vendor_id,
+                usb_product_id=product_id,
+                serial_number=serial_number,
+                model=model,
+            )
+        )
+
+    return devices
+
+
+def _probe_serial_device_model(device_path: str) -> str | None:
+    """Probe a serial device to get the PLX switch model.
+
+    Args:
+        device_path: Path to serial device (e.g., "/dev/ttyACM0")
+
+    Returns:
+        Model string (e.g., "PEX88096") or None if probe fails.
+    """
+    try:
+        from plxtools.backends.serial import SerialBackend
+
+        with SerialBackend(device_path, timeout=1.0) as backend:
+            info = backend.get_version()
+            return info.model or None
+    except Exception:
+        return None

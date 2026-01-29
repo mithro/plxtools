@@ -7,6 +7,9 @@ from plxtools.backends.mock import MockBackend, MockEepromBackend
 # from plxtools.backends.pcie_sysfs import PcieSysfsBackend
 # from plxtools.backends.pcie_mmap import PcieMmapBackend
 
+# Serial backend is imported on-demand to avoid requiring pyserial on all systems
+# from plxtools.backends.serial import SerialBackend
+
 __all__ = [
     "BaseBackend",
     "MockBackend",
@@ -15,4 +18,5 @@ __all__ = [
     # Available via explicit import:
     # "PcieSysfsBackend",
     # "PcieMmapBackend",
+    # "SerialBackend",
 ]

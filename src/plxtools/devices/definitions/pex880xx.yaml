@@ -1,0 +1,70 @@
+# PEX880xx - 96-lane PCIe Gen4 Switch Family
+# Broadcom (accessed via Serial Cables ATLAS HOST CARD USB management interface)
+
+device:
+  vendor_id: 0x1000
+  device_id: 0xc010
+  name: "PEX880xx"
+  description: "96-lane PCIe Gen4 Switch (Atlas)"
+
+  # Number of ports and lanes
+  ports: 32
+  lanes: 96
+
+  # PCIe generation
+  pcie_gen: 4
+
+registers:
+  # Port 0 base registers (at 0x60800000 via serial interface)
+  # Note: Offsets are absolute addresses used with dr/mw commands
+
+  port_device_id:
+    offset: 0x60800000
+    size: 4
+    access: ro
+    description: "Port 0 Device/Vendor ID"
+    fields:
+      vendor_id:
+        bits: [0, 15]
+        description: "PCI Vendor ID"
+      device_id:
+        bits: [16, 31]
+        description: "PCI Device ID"
+
+  port_status_command:
+    offset: 0x60800004
+    size: 4
+    access: rw
+    description: "Port 0 Status/Command Register"
+    fields:
+      command:
+        bits: [0, 15]
+        description: "PCI Command register"
+      status:
+        bits: [16, 31]
+        description: "PCI Status register"
+
+  port_class_revision:
+    offset: 0x60800008
+    size: 4
+    access: ro
+    description: "Port 0 Class Code/Revision"
+    fields:
+      revision:
+        bits: [0, 7]
+        description: "Revision ID"
+      prog_if:
+        bits: [8, 15]
+        description: "Programming Interface"
+      subclass:
+        bits: [16, 23]
+        description: "Subclass Code"
+      base_class:
+        bits: [24, 31]
+        description: "Base Class Code"
+
+  # Note: Additional registers and port offsets TBD after further investigation
+  # The serial interface uses absolute addresses, not port-relative offsets
+
+# EEPROM configuration is TBD - the serial interface uses 'df' command
+# for flash access, which may have a different format than PCIe EEPROM
