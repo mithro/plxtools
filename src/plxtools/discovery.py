@@ -22,14 +22,17 @@ class PlxDevice:
     @property
     def vendor_name(self) -> str:
         """Human-readable vendor name."""
-        if self.vendor_id == 0x10B5:
-            return "PLX/Broadcom"
-        return f"Unknown ({self.vendor_id:#06x})"
+        vendor_names = {
+            0x10B5: "PLX/Broadcom",
+            0x1000: "Broadcom/LSI",
+        }
+        return vendor_names.get(self.vendor_id, f"Unknown ({self.vendor_id:#06x})")
 
     @property
     def device_name(self) -> str:
-        """Human-readable device name based on device ID."""
-        names = {
+        """Human-readable device name based on vendor and device ID."""
+        # PLX vendor 0x10B5 device names
+        plx_names = {
             0x8733: "PEX8733",
             0x8696: "PEX8696",
             0x8748: "PEX8748",
@@ -55,8 +58,18 @@ class PlxDevice:
             0x8516: "PEX8516",
             0x8512: "PEX8512",
             0x8508: "PEX8508",
+            0x87D0: "PEX8749-DMA",
         }
-        return names.get(self.device_id, f"Unknown ({self.device_id:#06x})")
+        # Broadcom/LSI vendor 0x1000 device names (PEX880xx Gen4 family)
+        broadcom_names = {
+            0xC010: "PEX880xx",
+            0xC012: "PEX880xx-mgmt",
+        }
+        if self.vendor_id == 0x10B5:
+            return plx_names.get(self.device_id, f"Unknown ({self.device_id:#06x})")
+        if self.vendor_id == 0x1000:
+            return broadcom_names.get(self.device_id, f"Unknown ({self.device_id:#06x})")
+        return f"Unknown ({self.device_id:#06x})"
 
     @property
     def is_switch(self) -> bool:
@@ -65,7 +78,10 @@ class PlxDevice:
 
 
 SYSFS_PCI_PATH = Path("/sys/bus/pci/devices")
-PLX_VENDOR_ID = 0x10B5
+# PLX/Broadcom vendor IDs used across different switch generations
+PLX_VENDOR_ID = 0x10B5  # PLX Technology (Gen1-Gen3 switches)
+BROADCOM_LSI_VENDOR_ID = 0x1000  # Broadcom/LSI (Gen4+ PEX880xx)
+PLX_VENDOR_IDS = {PLX_VENDOR_ID, BROADCOM_LSI_VENDOR_ID}
 
 
 def _read_sysfs_hex(path: Path) -> int | None:
@@ -79,7 +95,8 @@ def _read_sysfs_hex(path: Path) -> int | None:
 def discover_plx_devices() -> list[PlxDevice]:
     """Discover all PLX/Broadcom PCIe devices in the system.
 
-    Scans /sys/bus/pci/devices for devices with vendor ID 0x10B5.
+    Scans /sys/bus/pci/devices for devices with vendor ID 0x10B5 (PLX)
+    or 0x1000 (Broadcom/LSI, used by PEX880xx Gen4 switches).
 
     Returns:
         List of PlxDevice objects for each discovered device.
@@ -89,9 +106,12 @@ def discover_plx_devices() -> list[PlxDevice]:
     if not SYSFS_PCI_PATH.exists():
         return devices
 
+    # Known PEX880xx device IDs (vendor 0x1000)
+    pex880xx_device_ids = {0xC010, 0xC012}
+
     for device_dir in SYSFS_PCI_PATH.iterdir():
         vendor_id = _read_sysfs_hex(device_dir / "vendor")
-        if vendor_id != PLX_VENDOR_ID:
+        if vendor_id not in PLX_VENDOR_IDS:
             continue
 
         device_id = _read_sysfs_hex(device_dir / "device")
@@ -101,6 +121,11 @@ def discover_plx_devices() -> list[PlxDevice]:
         class_code = _read_sysfs_hex(device_dir / "class")
 
         if device_id is None:
+            continue
+
+        # For vendor 0x1000 (Broadcom/LSI), only include known PEX device IDs
+        # to avoid matching unrelated Broadcom devices (SAS HBAs, NICs, etc.)
+        if vendor_id == BROADCOM_LSI_VENDOR_ID and device_id not in pex880xx_device_ids:
             continue
 
         devices.append(
