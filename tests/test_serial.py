@@ -508,14 +508,15 @@ Cmd>"""
             backend.close()
 
     def test_parse_i2c_scan_output(self) -> None:
-        """Parse 'scan' command output into list of addresses."""
+        """Parse 'scan' command output matching actual hardware format."""
         from plxtools.backends.serial import SerialBackend
 
-        scan_response = """I2C Bus Scan:
-  0x50: ACK
-  0x51: ACK
-  0x68: ACK
-  0xd4: ACK
+        # Actual format from Serial Cables ATLAS HOST CARD
+        scan_response = """Scan I2C channel 0 devices ....
+Device address:0x40 found
+Device address:0x42 found
+Device address:0xa2 found
+Device address:0xd2 found
 Cmd>"""
 
         with patch("plxtools.backends.serial.serial.Serial") as mock_serial_class:
@@ -525,7 +526,7 @@ Cmd>"""
             backend = SerialBackend("/dev/ttyACM0")
             addresses = backend.i2c_scan()
 
-            assert addresses == [0x50, 0x51, 0x68, 0xD4]
+            assert addresses == [0x40, 0x42, 0xA2, 0xD2]
             backend.close()
 
 
@@ -574,8 +575,9 @@ class TestFlashAccess:
         """read_flash should send 'df' command and return bytes."""
         from plxtools.backends.serial import SerialBackend
 
-        df_response = """00000000: 5a 00 10 00 01 02 03 04 05 06 07 08 09 0a 0b 0c
-00000010: 0d 0e 0f 10 11 12 13 14 15 16 17 18 19 1a 1b 1c
+        # Actual format from hardware: 32-bit words, not individual bytes
+        df_response = """00000000:efbeadde 00000b00 00000000 00000400
+00000010:00000000 01000000 00000400 00000400
 Cmd>"""
 
         with patch("plxtools.backends.serial.serial.Serial") as mock_serial_class:
@@ -585,6 +587,8 @@ Cmd>"""
             backend = SerialBackend("/dev/ttyACM0")
             data = backend.read_flash(address=0, count=0x20)
 
+            # 8 words * 4 bytes each = 32 bytes
             assert len(data) == 32
-            assert data[0] == 0x5A  # EEPROM signature
+            # First word 0xefbeadde stored as little-endian bytes
+            assert data[0:4] == b"\xde\xad\xbe\xef"
             backend.close()

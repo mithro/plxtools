@@ -453,18 +453,20 @@ class SerialBackend(BaseBackend):
     def _parse_i2c_scan_response(self, response: str) -> list[int]:
         """Parse 'scan' command output.
 
-        Expected format:
-            I2C Bus Scan:
-              0x50: ACK
-              0x51: ACK
+        Actual format from hardware:
+            Scan I2C channel 0 devices ....
+            Device address:0x40 found
+            Device address:0xa2 found
         """
         addresses: list[int] = []
 
         for line in response.split("\n"):
             line = line.strip()
 
-            # Look for hex addresses with ACK
-            match = re.search(r"0x([0-9a-fA-F]+).*ACK", line, re.IGNORECASE)
+            # Match "Device address:0xXX found" or "0xXX: ACK" formats
+            match = re.search(
+                r"(?:address:\s*)?0x([0-9a-fA-F]+)\s*(?:found|ACK)", line, re.IGNORECASE
+            )
             if match:
                 addr = int(match.group(1), 16)
                 addresses.append(addr)
@@ -556,27 +558,35 @@ class SerialBackend(BaseBackend):
     def _parse_flash_response(self, response: str) -> bytes:
         """Parse df (dump flash) response.
 
-        Expected format:
-            00000000: 5a 00 10 00 01 02 03 04 05 06 07 08 09 0a 0b 0c
-            00000010: 0d 0e 0f 10 11 12 13 14 15 16 17 18 19 1a 1b 1c
+        Actual format from hardware (32-bit words, not individual bytes):
+            00000000:efbeadde 00000b00 00000000 00000400
+            00000010:00000000 01000000 00000400 00000400
         """
+        import struct
+
         data = bytearray()
 
         for line in response.split("\n"):
             line = line.strip()
 
-            # Parse "ADDR: HH HH HH ..." format
-            match = re.match(r"[0-9a-fA-F]+:\s*(.+)", line)
+            # Parse "ADDR:WORD WORD WORD ..." format
+            match = re.match(r"[0-9a-fA-F]+:(.+)", line)
             if not match:
                 continue
 
             hex_part = match.group(1).strip()
 
-            # Parse hex bytes (may have extra text at end)
-            for byte_str in hex_part.split():
-                # Stop if we hit non-hex
-                if not re.match(r"^[0-9a-fA-F]{2}$", byte_str):
-                    break
-                data.append(int(byte_str, 16))
+            for word_str in hex_part.split():
+                word_str = word_str.strip()
+                if not word_str:
+                    continue
+                # Handle 8-char hex words (32-bit values)
+                if re.match(r"^[0-9a-fA-F]{8}$", word_str):
+                    word = int(word_str, 16)
+                    # Store as little-endian bytes (PCIe convention)
+                    data.extend(struct.pack("<I", word))
+                # Also handle individual hex bytes for compatibility
+                elif re.match(r"^[0-9a-fA-F]{2}$", word_str):
+                    data.append(int(word_str, 16))
 
         return bytes(data)
