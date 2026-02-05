@@ -34,16 +34,23 @@ def list_devices(ctx: click.Context, show_all: bool) -> None:
         devices = discover_plx_switches()
 
     if ctx.obj["json"]:
-        output = [
-            {
+        output = []
+        for d in devices:
+            entry: dict[str, str | int | bool | None] = {
                 "bdf": d.bdf,
                 "vendor_id": f"0x{d.vendor_id:04X}",
                 "device_id": f"0x{d.device_id:04X}",
                 "device_name": d.device_name,
                 "is_switch": d.is_switch,
             }
-            for d in devices
-        ]
+            # Include switchdb metadata if available
+            if d.switch_info is not None:
+                info = d.switch_info
+                entry["pcie_gen"] = info.pcie_gen.value if info.pcie_gen else None
+                entry["total_lanes"] = info.total_lanes
+                entry["max_ports"] = info.max_ports
+                entry["has_dma"] = info.has_dma
+            output.append(entry)
         click.echo(json.dumps(output, indent=2))
     else:
         if not devices:
@@ -54,7 +61,9 @@ def list_devices(ctx: click.Context, show_all: bool) -> None:
         click.echo()
         for device in devices:
             switch_marker = " [switch]" if device.is_switch else ""
-            click.echo(f"  {device.bdf}: {device.device_name}{switch_marker}")
+            # Show rich specs from switchdb if available
+            display_name = device.format_display_name()
+            click.echo(f"  {device.bdf}: {display_name}{switch_marker}")
 
 
 @main.group()
@@ -160,6 +169,7 @@ def device_info(ctx: click.Context, bdf: str) -> None:
     """
     from plxtools.backends.pcie_sysfs import PcieSysfsBackend, validate_bdf
     from plxtools.devices import load_device_by_id
+    from plxtools.switchdb import lookup_ic, lookup_vendor
 
     try:
         validate_bdf(bdf)
@@ -172,27 +182,66 @@ def device_info(ctx: click.Context, bdf: str) -> None:
             vendor_id = backend.vendor_id
             device_id = backend.device_id
 
+            # Get info from switchdb (always available)
+            vendor = lookup_vendor(vendor_id)
+            ic = lookup_ic(vendor_id, device_id)
+
+            # Get YAML device definition (optional, for register info)
             device_def = load_device_by_id(vendor_id, device_id)
 
             if ctx.obj["json"]:
-                result = {
+                result: dict[str, str | int | bool | None] = {
                     "bdf": bdf,
                     "vendor_id": f"0x{vendor_id:04X}",
                     "device_id": f"0x{device_id:04X}",
-                    "device_name": device_def.info.name if device_def else None,
-                    "ports": device_def.info.ports if device_def else None,
-                    "lanes": device_def.info.lanes if device_def else None,
+                    "vendor_name": vendor.name if vendor else None,
+                    "part_number": ic.part_number if ic else None,
+                    "description": ic.description if ic else None,
                 }
+                # Add switchdb metadata
+                if ic:
+                    result["pcie_gen"] = ic.pcie_gen.value if ic.pcie_gen else None
+                    result["total_lanes"] = ic.total_lanes
+                    result["max_ports"] = ic.max_ports
+                    result["has_dma"] = ic.has_dma
+                    result["has_nt"] = ic.has_nt
+                    result["family"] = ic.family
+                    result["product_url"] = ic.product_url
+                # Add YAML definition info if available
+                if device_def:
+                    result["has_yaml_definition"] = True
                 click.echo(json.dumps(result, indent=2))
             else:
                 click.echo(f"Device: {bdf}")
                 click.echo(f"Vendor ID: 0x{vendor_id:04X}")
                 click.echo(f"Device ID: 0x{device_id:04X}")
-                if device_def:
+                if vendor:
+                    click.echo(f"Vendor: {vendor.name}")
+                if ic:
+                    click.echo(f"Part Number: {ic.part_number}")
+                    click.echo(f"Description: {ic.description}")
+                    if ic.pcie_gen:
+                        click.echo(f"PCIe Generation: {ic.pcie_gen}")
+                    if ic.total_lanes:
+                        click.echo(f"Total Lanes: {ic.total_lanes}")
+                    if ic.max_ports:
+                        click.echo(f"Max Ports: {ic.max_ports}")
+                    if ic.has_dma is not None:
+                        click.echo(f"DMA Support: {'Yes' if ic.has_dma else 'No'}")
+                    if ic.has_nt is not None:
+                        click.echo(f"NT Bridge Support: {'Yes' if ic.has_nt else 'No'}")
+                    if ic.family:
+                        click.echo(f"Family: {ic.family}")
+                    if ic.product_url:
+                        click.echo(f"Product URL: {ic.product_url}")
+                elif device_def:
+                    # Fallback to YAML definition if not in switchdb
                     click.echo(f"Name: {device_def.info.name}")
                     click.echo(f"Description: {device_def.info.description}")
                     click.echo(f"Ports: {device_def.info.ports}")
                     click.echo(f"Lanes: {device_def.info.lanes}")
+                else:
+                    click.echo("(Device not found in database)")
 
     except FileNotFoundError:
         click.echo(f"Error: Device {bdf} not found", err=True)
@@ -234,6 +283,216 @@ Example:
             "plxtools": __import__("plxtools"),
         },
     )
+
+
+# --- Database commands ---
+
+
+@main.group()
+def db() -> None:
+    """Browse the PCIe switch IC database."""
+    pass
+
+
+@db.command("list")
+@click.option("--gen", type=int, help="Filter by PCIe generation (1-5)")
+@click.option("--vendor", type=str, help="Filter by vendor (plx, broadcom)")
+@click.option("--dma", is_flag=True, help="Show only devices with DMA support")
+@click.pass_context
+def db_list(
+    ctx: click.Context,
+    gen: int | None,
+    vendor: str | None,
+    dma: bool,
+) -> None:
+    """List all known PCIe switch ICs in the database."""
+    from plxtools.switchdb import PCIeGen, get_db
+    from plxtools.switchdb._vendors import BROADCOM_LSI_VENDOR_ID, PLX_VENDOR_ID
+
+    database = get_db()
+    switches = database.switches
+
+    # Apply filters
+    if gen is not None:
+        target_gen = PCIeGen(gen)
+        switches = [s for s in switches if s.pcie_gen == target_gen]
+
+    if vendor is not None:
+        vendor_lower = vendor.lower()
+        if vendor_lower in ("plx", "0x10b5"):
+            switches = [s for s in switches if s.vendor_id == PLX_VENDOR_ID]
+        elif vendor_lower in ("broadcom", "lsi", "0x1000"):
+            switches = [s for s in switches if s.vendor_id == BROADCOM_LSI_VENDOR_ID]
+
+    if dma:
+        switches = [s for s in switches if s.has_dma is True]
+
+    if ctx.obj["json"]:
+        output = []
+        for ic in switches:
+            entry: dict[str, str | int | bool | None] = {
+                "vendor_id": f"0x{ic.vendor_id:04X}",
+                "device_id": f"0x{ic.device_id:04X}",
+                "part_number": ic.part_number,
+                "pcie_gen": ic.pcie_gen.value if ic.pcie_gen else None,
+                "total_lanes": ic.total_lanes,
+                "max_ports": ic.max_ports,
+                "has_dma": ic.has_dma,
+                "family": ic.family,
+            }
+            output.append(entry)
+        click.echo(json.dumps(output, indent=2))
+    else:
+        if not switches:
+            click.echo("No matching devices found.")
+            return
+
+        click.echo(f"Known PCIe switch ICs ({len(switches)} devices):")
+        click.echo()
+        # Group by family for readability
+        current_family: str | None = None
+        for ic in sorted(switches, key=lambda x: (x.family or "", x.part_number)):
+            if ic.family != current_family:
+                current_family = ic.family
+                if current_family:
+                    click.echo(f"  {current_family}:")
+                else:
+                    click.echo("  Other:")
+
+            specs = ic.format_specs()
+            dma_marker = " [DMA]" if ic.has_dma else ""
+            click.echo(f"    {ic.part_number:<20} {specs:<16}{dma_marker}")
+
+
+@db.command("info")
+@click.argument("part")
+@click.pass_context
+def db_info(ctx: click.Context, part: str) -> None:
+    """Show detailed information about a switch IC.
+
+    PART is the part number (e.g., PEX8749) or PCI ID (e.g., 10B5:8749).
+    """
+    from plxtools.switchdb import lookup_by_part, lookup_ic, lookup_vendor
+
+    ic = None
+
+    # Try as part number first
+    ic = lookup_by_part(part)
+
+    # If not found, try as PCI ID (vendor:device)
+    if ic is None and ":" in part:
+        try:
+            vendor_str, device_str = part.split(":", 1)
+            vendor_id = int(vendor_str, 16)
+            device_id = int(device_str, 16)
+            ic = lookup_ic(vendor_id, device_id)
+        except ValueError:
+            pass
+
+    if ic is None:
+        click.echo(f"Error: Unknown part number or PCI ID: {part}", err=True)
+        sys.exit(1)
+
+    vendor = lookup_vendor(ic.vendor_id)
+
+    if ctx.obj["json"]:
+        result: dict[str, str | int | bool | None] = {
+            "vendor_id": f"0x{ic.vendor_id:04X}",
+            "device_id": f"0x{ic.device_id:04X}",
+            "vendor_name": vendor.name if vendor else None,
+            "part_number": ic.part_number,
+            "description": ic.description,
+            "pcie_gen": ic.pcie_gen.value if ic.pcie_gen else None,
+            "total_lanes": ic.total_lanes,
+            "max_ports": ic.max_ports,
+            "max_port_width": ic.max_port_width,
+            "family": ic.family,
+            "has_dma": ic.has_dma,
+            "has_nt": ic.has_nt,
+            "package": ic.package,
+            "product_url": ic.product_url,
+            "notes": ic.notes,
+        }
+        click.echo(json.dumps(result, indent=2))
+    else:
+        click.echo(f"Part Number: {ic.part_number}")
+        click.echo(f"PCI ID: {ic.pci_id_str}")
+        if vendor:
+            click.echo(f"Vendor: {vendor.name}")
+        click.echo(f"Description: {ic.description}")
+        click.echo()
+        click.echo("Specifications:")
+        if ic.pcie_gen:
+            click.echo(f"  PCIe Generation: {ic.pcie_gen}")
+        if ic.total_lanes:
+            click.echo(f"  Total Lanes: {ic.total_lanes}")
+        if ic.max_ports:
+            click.echo(f"  Max Ports: {ic.max_ports}")
+        if ic.max_port_width:
+            click.echo(f"  Max Port Width: x{ic.max_port_width}")
+        if ic.family:
+            click.echo(f"  Family: {ic.family}")
+        if ic.has_dma is not None:
+            click.echo(f"  DMA Support: {'Yes' if ic.has_dma else 'No'}")
+        if ic.has_nt is not None:
+            click.echo(f"  NT Bridge: {'Yes' if ic.has_nt else 'No'}")
+        if ic.package:
+            click.echo(f"  Package: {ic.package}")
+        if ic.product_url:
+            click.echo()
+            click.echo(f"Product URL: {ic.product_url}")
+        if ic.notes:
+            click.echo()
+            click.echo(f"Notes: {ic.notes}")
+
+
+@db.command("stats")
+@click.pass_context
+def db_stats(ctx: click.Context) -> None:
+    """Show database statistics."""
+    from plxtools.switchdb import get_db
+
+    database = get_db()
+
+    # Count by generation
+    gen_counts: dict[str, int] = {}
+    for ic in database.switches:
+        gen_name = str(ic.pcie_gen) if ic.pcie_gen else "Unknown"
+        gen_counts[gen_name] = gen_counts.get(gen_name, 0) + 1
+
+    # Count by vendor
+    vendor_counts: dict[str, int] = {}
+    for ic in database.switches:
+        vendor = database.lookup_vendor(ic.vendor_id)
+        vendor_name = vendor.name if vendor else f"0x{ic.vendor_id:04X}"
+        vendor_counts[vendor_name] = vendor_counts.get(vendor_name, 0) + 1
+
+    # Count DMA support
+    dma_count = sum(1 for ic in database.switches if ic.has_dma is True)
+
+    if ctx.obj["json"]:
+        result = {
+            "total_devices": len(database),
+            "total_vendors": len(database.vendors),
+            "by_generation": gen_counts,
+            "by_vendor": vendor_counts,
+            "with_dma": dma_count,
+        }
+        click.echo(json.dumps(result, indent=2))
+    else:
+        click.echo(f"Total devices: {len(database)}")
+        click.echo(f"Total vendors: {len(database.vendors)}")
+        click.echo()
+        click.echo("By generation:")
+        for gen in [f"Gen{i}" for i in range(1, 6)] + ["Unknown"]:
+            if gen in gen_counts:
+                click.echo(f"  {gen}: {gen_counts[gen]}")
+        click.echo()
+        click.echo("By vendor:")
+        for vendor_name, count in sorted(vendor_counts.items()):
+            click.echo(f"  {vendor_name}: {count}")
+        click.echo()
+        click.echo(f"With DMA support: {dma_count}")
 
 
 # --- Serial commands ---
