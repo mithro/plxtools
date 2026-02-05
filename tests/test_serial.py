@@ -166,13 +166,13 @@ class TestSerialBackendRead32:
     """Test SerialBackend.read32() method."""
 
     def test_read32_sends_dr_command(self) -> None:
-        """read32 should send 'dr <offset> 1' command."""
+        """read32 should send 'dr <offset> 4' command (count is in bytes)."""
         from plxtools.backends.serial import SerialBackend
 
         with patch("plxtools.backends.serial.serial.Serial") as mock_serial_class:
             mock_serial = MockSerial(
                 responses={
-                    r"dr\s+60800000\s+1": "60800000:c0101000\nCmd>",
+                    r"dr\s+60800000\s+4": "60800000:c0101000\nCmd>",
                 }
             )
             mock_serial_class.return_value = mock_serial
@@ -181,8 +181,8 @@ class TestSerialBackendRead32:
             value = backend.read32(0x60800000)
 
             assert value == 0xC0101000
-            # Verify command was sent
-            assert any(b"dr 60800000 1" in w for w in mock_serial.written)
+            # Verify command was sent with count=4 (bytes)
+            assert any(b"dr 60800000 4" in w for w in mock_serial.written)
             backend.close()
 
     def test_read32_parses_dr_output_single_value(self) -> None:
@@ -193,7 +193,7 @@ class TestSerialBackendRead32:
             # Response format: address:value
             mock_serial = MockSerial(
                 responses={
-                    r"dr\s+0\s+1": "00000000:10b50001\nCmd>",
+                    r"dr\s+0\s+4": "00000000:10b50001\nCmd>",
                 }
             )
             mock_serial_class.return_value = mock_serial
@@ -209,10 +209,10 @@ class TestSerialBackendRead32:
         from plxtools.backends.serial import SerialBackend
 
         with patch("plxtools.backends.serial.serial.Serial") as mock_serial_class:
-            # Response format when asking for multiple registers
+            # Response format when device returns multiple values on one line
             mock_serial = MockSerial(
                 responses={
-                    r"dr\s+0\s+1": "00000000:c0101000 00100007 060400b0 00010000\nCmd>",
+                    r"dr\s+0\s+4": "00000000:c0101000 00100007 060400b0 00010000\nCmd>",
                 }
             )
             mock_serial_class.return_value = mock_serial
@@ -410,14 +410,14 @@ class TestResponseParsing:
     """Test parsing of various serial command responses."""
 
     def test_parse_version_output(self) -> None:
-        """Parse 'ver' command output into SerialDeviceInfo."""
+        """Parse 'ver' command output matching actual hardware format."""
         from plxtools.backends.serial import SerialBackend
 
-        ver_response = """Serial Number  : SN123456789
-Company        : Broadcom Inc.
-Model          : PEX88096
-Version        : 1.2.3.4
-Build Date     : 2024-01-15
+        # Actual format from Serial Cables ATLAS HOST CARD
+        ver_response = """S/N     : 400012002070309
+Company : Serial Cables
+Model   : ATLAS HOST CARD
+Version : 0.1.9     Date : Mar  4 2020 13:01:18
 Cmd>"""
 
         with patch("plxtools.backends.serial.serial.Serial") as mock_serial_class:
@@ -427,11 +427,11 @@ Cmd>"""
             backend = SerialBackend("/dev/ttyACM0")
             info = backend.get_version()
 
-            assert info.serial_number == "SN123456789"
-            assert info.company == "Broadcom Inc."
-            assert info.model == "PEX88096"
-            assert info.version == "1.2.3.4"
-            assert info.build_date == "2024-01-15"
+            assert info.serial_number == "400012002070309"
+            assert info.company == "Serial Cables"
+            assert info.model == "ATLAS HOST CARD"
+            assert info.version == "0.1.9"
+            assert info.build_date == "Mar  4 2020 13:01:18"
             backend.close()
 
     def test_parse_environment_output(self) -> None:
@@ -460,15 +460,24 @@ Cmd>"""
             backend.close()
 
     def test_parse_port_status_output(self) -> None:
-        """Parse 'showport' command output into list of PortStatus."""
+        """Parse 'showport' command output matching actual hardware format."""
         from plxtools.backends.serial import SerialBackend
 
-        showport_response = """Port  Type        Speed  Width  Max Speed  Max Width
-----  ----------  -----  -----  ---------  ---------
-0     Upstream    Gen4   x16    Gen4       x16
-1     Downstream  Gen3   x4     Gen4       x8
-2     Downstream  Gen1   x1     Gen4       x4
-Cmd>"""
+        # Actual format from Serial Cables ATLAS HOST CARD
+        sep = "=" * 76
+        showport_response = (
+            "Atals chip ver: B0\r\n"
+            + sep + "\r\n"
+            + "                              Upstream\r\n"
+            + sep + "\r\n"
+            + "Port  0: speed = Gen3, width = 8, max_speed = Gen4, max_width = 16\r\n"
+            + sep + "\r\n"
+            + "                              Downstream\r\n"
+            + sep + "\r\n"
+            + "Port 16: speed = Gen1, width = 0, max_speed = Gen4, max_width = 1\r\n"
+            + "Port 17: speed = Gen1, width = 0, max_speed = Gen4, max_width = 1\r\n"
+            + "Cmd>"
+        )
 
         with patch("plxtools.backends.serial.serial.Serial") as mock_serial_class:
             mock_serial = MockSerial(responses={r"showport": showport_response})
@@ -481,19 +490,20 @@ Cmd>"""
 
             assert ports[0].port == 0
             assert ports[0].port_type == "Upstream"
-            assert ports[0].speed == "Gen4"
-            assert ports[0].width == 16
+            assert ports[0].speed == "Gen3"
+            assert ports[0].width == 8
             assert ports[0].max_speed == "Gen4"
             assert ports[0].max_width == 16
 
-            assert ports[1].port == 1
+            assert ports[1].port == 16
             assert ports[1].port_type == "Downstream"
-            assert ports[1].speed == "Gen3"
-            assert ports[1].width == 4
+            assert ports[1].speed == "Gen1"
+            assert ports[1].width == 0
 
-            assert ports[2].port == 2
+            assert ports[2].port == 17
+            assert ports[2].port_type == "Downstream"
             assert ports[2].speed == "Gen1"
-            assert ports[2].width == 1
+            assert ports[2].max_width == 1
 
             backend.close()
 

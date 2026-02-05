@@ -172,7 +172,8 @@ class SerialBackend(BaseBackend):
     def read32(self, offset: int) -> int:
         """Read a 32-bit register at the given offset.
 
-        Uses the 'dr <offset> 1' command to read a single register.
+        Uses the 'dr <offset> 4' command to read a single 32-bit register.
+        The dr command count parameter is in bytes, so 4 bytes = one 32-bit word.
 
         Args:
             offset: Register offset in bytes (must be 4-byte aligned).
@@ -186,8 +187,8 @@ class SerialBackend(BaseBackend):
         """
         self._validate_offset(offset)
 
-        # Send dr command (offset in hex, count=1)
-        cmd = f"dr {offset:x} 1"
+        # Send dr command (offset in hex, count in bytes: 4 = one 32-bit word)
+        cmd = f"dr {offset:x} 4"
         response = self.send_command(cmd)
 
         # Parse response: "ADDR:VALUE [VALUE ...]"
@@ -272,12 +273,11 @@ class SerialBackend(BaseBackend):
     def _parse_version_response(self, response: str) -> SerialDeviceInfo:
         """Parse 'ver' command output.
 
-        Expected format:
-            Serial Number  : SN123456789
-            Company        : Broadcom Inc.
-            Model          : PEX88096
-            Version        : 1.2.3.4
-            Build Date     : 2024-01-15
+        Actual format from hardware:
+            S/N     : 400012002070309
+            Company : Serial Cables
+            Model   : ATLAS HOST CARD
+            Version : 0.1.9     Date : Mar  4 2020 13:01:18
         """
         info: dict[str, str] = {}
 
@@ -293,12 +293,23 @@ class SerialBackend(BaseBackend):
 
             info[key] = value
 
+        # Handle Version line that may contain "Date : ..."
+        version_str = info.get("version", "")
+        build_date = info.get("build_date", "")
+
+        # Check if version contains embedded "Date :" field
+        date_match = re.search(r"Date\s*:\s*(.+)", version_str)
+        if date_match:
+            build_date = date_match.group(1).strip()
+            # Extract just the version number (before "Date")
+            version_str = re.sub(r"\s*Date\s*:.*", "", version_str).strip()
+
         return SerialDeviceInfo(
-            serial_number=info.get("serial_number", ""),
+            serial_number=info.get("s/n", info.get("serial_number", "")),
             company=info.get("company", ""),
             model=info.get("model", ""),
-            version=info.get("version", ""),
-            build_date=info.get("build_date", ""),
+            version=version_str,
+            build_date=build_date,
         )
 
     def get_environment(self) -> EnvironmentInfo:
@@ -370,48 +381,58 @@ class SerialBackend(BaseBackend):
     def _parse_port_status_response(self, response: str) -> list[PortStatus]:
         """Parse 'showport' command output.
 
-        Expected format (table):
-            Port  Type        Speed  Width  Max Speed  Max Width
-            ----  ----------  -----  -----  ---------  ---------
-            0     Upstream    Gen4   x16    Gen4       x16
-            1     Downstream  Gen3   x4     Gen4       x8
+        Actual format from hardware:
+            Atals chip ver: B0
+            ====...====
+                                  Upstream
+            ====...====
+            Port  0: speed = Gen3, width = 8, max_speed = Gen4, max_width = 16
+            ====...====
+                                  Downstream
+            ====...====
+            Port 16: speed = Gen1, width = 0, max_speed = Gen4, max_width = 1
+            Port 17: speed = Gen1, width = 0, max_speed = Gen4, max_width = 1
         """
         ports: list[PortStatus] = []
+        current_type = "Unknown"
+
+        # Pattern for port lines: "Port  N: speed = GenX, width = N, ..."
+        port_re = re.compile(
+            r"Port\s+(\d+):\s*"
+            r"speed\s*=\s*(\w+),\s*"
+            r"width\s*=\s*(\d+),\s*"
+            r"max_speed\s*=\s*(\w+),\s*"
+            r"max_width\s*=\s*(\d+)"
+        )
 
         for line in response.split("\n"):
             line = line.strip()
 
-            # Skip header and separator lines
-            if not line or "Port" in line and "Type" in line:
-                continue
-            if line.startswith("---"):
+            # Skip empty lines and separator lines
+            if not line or line.startswith("="):
                 continue
 
-            # Parse data line
-            # Format: PORT TYPE SPEED WIDTH MAX_SPEED MAX_WIDTH
-            parts = line.split()
-            if len(parts) < 6:
+            # Detect section headers
+            if line.lower() == "upstream":
+                current_type = "Upstream"
+                continue
+            if line.lower() == "downstream":
+                current_type = "Downstream"
                 continue
 
-            try:
-                port_num = int(parts[0])
-            except ValueError:
-                continue
-
-            # Parse width (strip 'x' prefix)
-            def parse_width(w: str) -> int:
-                return int(w.lstrip("xX"))
-
-            ports.append(
-                PortStatus(
-                    port=port_num,
-                    port_type=parts[1],
-                    speed=parts[2],
-                    width=parse_width(parts[3]),
-                    max_speed=parts[4],
-                    max_width=parse_width(parts[5]),
+            # Try to parse port line
+            match = port_re.match(line)
+            if match:
+                ports.append(
+                    PortStatus(
+                        port=int(match.group(1)),
+                        port_type=current_type,
+                        speed=match.group(2),
+                        width=int(match.group(3)),
+                        max_speed=match.group(4),
+                        max_width=int(match.group(5)),
+                    )
                 )
-            )
 
         return ports
 
