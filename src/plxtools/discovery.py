@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from plxtools.switchdb import SwitchIC
 
 
 @dataclass
@@ -22,59 +27,51 @@ class PlxDevice:
     @property
     def vendor_name(self) -> str:
         """Human-readable vendor name."""
-        vendor_names = {
-            0x10B5: "PLX/Broadcom",
-            0x1000: "Broadcom/LSI",
-        }
-        return vendor_names.get(self.vendor_id, f"Unknown ({self.vendor_id:#06x})")
+        from plxtools.switchdb import lookup_vendor
+
+        vendor = lookup_vendor(self.vendor_id)
+        if vendor is not None:
+            return vendor.name
+        return f"Unknown ({self.vendor_id:#06x})"
 
     @property
     def device_name(self) -> str:
         """Human-readable device name based on vendor and device ID."""
-        # PLX vendor 0x10B5 device names
-        plx_names = {
-            0x8733: "PEX8733",
-            0x8696: "PEX8696",
-            0x8748: "PEX8748",
-            0x8749: "PEX8749",
-            0x8764: "PEX8764",
-            0x8780: "PEX8780",
-            0x8796: "PEX8796",
-            0x8747: "PEX8747",
-            0x8732: "PEX8732",
-            0x8724: "PEX8724",
-            0x8716: "PEX8716",
-            0x8708: "PEX8708",
-            0x8648: "PEX8648",
-            0x8632: "PEX8632",
-            0x8624: "PEX8624",
-            0x8616: "PEX8616",
-            0x8608: "PEX8608",
-            0x8604: "PEX8604",
-            0x8532: "PEX8532",
-            0x8524: "PEX8524",
-            0x8518: "PEX8518",
-            0x8517: "PEX8517",
-            0x8516: "PEX8516",
-            0x8512: "PEX8512",
-            0x8508: "PEX8508",
-            0x87D0: "PEX8749-DMA",
-        }
-        # Broadcom/LSI vendor 0x1000 device names (PEX880xx Gen4 family)
-        broadcom_names = {
-            0xC010: "PEX880xx",
-            0xC012: "PEX880xx-mgmt",
-        }
-        if self.vendor_id == 0x10B5:
-            return plx_names.get(self.device_id, f"Unknown ({self.device_id:#06x})")
-        if self.vendor_id == 0x1000:
-            return broadcom_names.get(self.device_id, f"Unknown ({self.device_id:#06x})")
+        from plxtools.switchdb import lookup_ic
+
+        ic = lookup_ic(self.vendor_id, self.device_id)
+        if ic is not None:
+            return ic.part_number
         return f"Unknown ({self.device_id:#06x})"
+
+    @cached_property
+    def switch_info(self) -> SwitchIC | None:
+        """Get full switch IC information from the database.
+
+        Returns:
+            SwitchIC object with detailed specs, or None if device not in database.
+        """
+        from plxtools.switchdb import lookup_ic
+
+        return lookup_ic(self.vendor_id, self.device_id)
 
     @property
     def is_switch(self) -> bool:
         """Check if this is a PCIe switch (class code 0x0604xx)."""
         return (self.class_code >> 8) == 0x0604
+
+    def format_display_name(self) -> str:
+        """Format device name with specs for display.
+
+        Returns a string like "PEX8733 [Gen3 32L 18P]" if specs are available,
+        or just the device name if not.
+        """
+        name = self.device_name
+        if self.switch_info is not None:
+            specs = self.switch_info.format_specs()
+            if specs:
+                return f"{name} {specs}"
+        return name
 
 
 SYSFS_PCI_PATH = Path("/sys/bus/pci/devices")
@@ -101,32 +98,31 @@ def discover_plx_devices() -> list[PlxDevice]:
     Returns:
         List of PlxDevice objects for each discovered device.
     """
+    from plxtools.switchdb import is_known_switch, is_known_vendor
+
     devices: list[PlxDevice] = []
 
     if not SYSFS_PCI_PATH.exists():
         return devices
 
-    # Known PEX880xx device IDs (vendor 0x1000)
-    pex880xx_device_ids = {0xC010, 0xC012}
-
     for device_dir in SYSFS_PCI_PATH.iterdir():
         vendor_id = _read_sysfs_hex(device_dir / "vendor")
-        if vendor_id not in PLX_VENDOR_IDS:
+        if vendor_id is None or not is_known_vendor(vendor_id):
             continue
 
         device_id = _read_sysfs_hex(device_dir / "device")
+        if device_id is None:
+            continue
+
+        # For non-PLX vendors (like 0x1000), only include known switch device IDs
+        # to avoid matching unrelated devices (SAS HBAs, NICs, etc.)
+        if vendor_id != PLX_VENDOR_ID and not is_known_switch(vendor_id, device_id):
+            continue
+
         subsys_vendor = _read_sysfs_hex(device_dir / "subsystem_vendor")
         subsys_device = _read_sysfs_hex(device_dir / "subsystem_device")
         revision = _read_sysfs_hex(device_dir / "revision")
         class_code = _read_sysfs_hex(device_dir / "class")
-
-        if device_id is None:
-            continue
-
-        # For vendor 0x1000 (Broadcom/LSI), only include known PEX device IDs
-        # to avoid matching unrelated Broadcom devices (SAS HBAs, NICs, etc.)
-        if vendor_id == BROADCOM_LSI_VENDOR_ID and device_id not in pex880xx_device_ids:
-            continue
 
         devices.append(
             PlxDevice(

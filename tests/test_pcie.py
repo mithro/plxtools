@@ -63,7 +63,7 @@ class TestPlxDevice:
             revision=0,
             class_code=0x060400,
         )
-        assert device.vendor_name == "PLX/Broadcom"
+        assert device.vendor_name == "PLX Technology"
 
     def test_vendor_name_unknown(self) -> None:
         """Unknown vendor ID shows hex value."""
