@@ -79,34 +79,70 @@ def list_devices(ctx: click.Context, ports: bool, show_all: bool) -> None:
 
 
 def _list_switch_ports(ctx: click.Context) -> None:
-    """List all switch ports."""
-    devices = discover_plx_switches()
+    """List all switch ports grouped by physical switch."""
+    switches = discover_unique_switches()
+
     if ctx.obj["json"]:
         output = []
-        for d in devices:
-            entry: dict[str, str | int | bool | None] = {
-                "bdf": d.bdf,
-                "vendor_id": f"0x{d.vendor_id:04X}",
-                "device_id": f"0x{d.device_id:04X}",
-                "device_name": d.device_name,
+        for sw in switches:
+            # Get all ports for this switch
+            all_ports = discover_plx_switches()
+            upstream = sw.upstream_port
+
+            downstream_ports_json: list[dict[str, str | int]] = []
+
+            # Find downstream ports (same device type on secondary bus)
+            for port in all_ports:
+                if (port.domain == upstream.domain
+                    and port.bus != upstream.bus
+                    and port.vendor_id == upstream.vendor_id
+                    and port.device_id == upstream.device_id):
+                    downstream_ports_json.append({
+                        "bdf": port.bdf,
+                        "role": "downstream",
+                        "port_num": port.device_func[0],
+                    })
+
+            switch_entry = {
+                "switch": sw.device_name,
+                "upstream_port": {
+                    "bdf": upstream.bdf,
+                    "role": "upstream",
+                },
+                "downstream_ports": downstream_ports_json,
             }
-            if d.switch_info is not None:
-                info = d.switch_info
-                entry["pcie_gen"] = info.pcie_gen.value if info.pcie_gen else None
-                entry["total_lanes"] = info.total_lanes
-                entry["max_ports"] = info.max_ports
-                entry["has_dma"] = info.has_dma
-            output.append(entry)
+            output.append(switch_entry)
         click.echo(json.dumps(output, indent=2))
     else:
-        if not devices:
-            click.echo("No PLX switch ports found.")
+        if not switches:
+            click.echo("No PLX switches found.")
             return
-        click.echo(f"Found {len(devices)} switch port(s):")
-        click.echo()
-        for device in devices:
-            display_name = device.format_display_name()
-            click.echo(f"  {device.bdf}: {display_name}")
+
+        all_ports = discover_plx_switches()
+
+        for sw in switches:
+            upstream = sw.upstream_port
+            display_name = sw.format_display_name()
+
+            click.echo(display_name)
+            click.echo("  Upstream:")
+            click.echo(f"    {upstream.bdf}")
+            click.echo(f"  Downstream ({sw.downstream_port_count} ports):")
+
+            # Find and list downstream ports
+            downstream_ports = [
+                port for port in all_ports
+                if (port.domain == upstream.domain
+                    and port.bus != upstream.bus
+                    and port.vendor_id == upstream.vendor_id
+                    and port.device_id == upstream.device_id)
+            ]
+
+            for port in sorted(downstream_ports, key=lambda p: p.bdf):
+                port_num = port.device_func[0]
+                click.echo(f"    {port.bdf} (port {port_num})")
+
+            click.echo()
 
 
 def _list_unique_switches(ctx: click.Context) -> None:
