@@ -25,6 +25,23 @@ class PlxDevice:
     class_code: int
 
     @property
+    def domain(self) -> int:
+        """PCI domain number from BDF."""
+        return int(self.bdf.split(":")[0], 16)
+
+    @property
+    def bus(self) -> int:
+        """PCI bus number from BDF."""
+        return int(self.bdf.split(":")[1], 16)
+
+    @property
+    def device_func(self) -> tuple[int, int]:
+        """PCI device and function numbers from BDF."""
+        dev_func = self.bdf.split(":")[2]
+        dev, func = dev_func.split(".")
+        return int(dev, 16), int(func, 16)
+
+    @property
     def vendor_name(self) -> str:
         """Human-readable vendor name."""
         from plxtools.switchdb import lookup_vendor
@@ -146,6 +163,108 @@ def discover_plx_switches() -> list[PlxDevice]:
         List of PlxDevice objects for PCIe switches only.
     """
     return [d for d in discover_plx_devices() if d.is_switch]
+
+
+@dataclass
+class PlxSwitch:
+    """A physical PCIe switch with its upstream port and port count.
+
+    In PCIe topology, a switch has one upstream port (connecting to the host)
+    and multiple downstream ports. This class represents the physical switch
+    by its upstream port, along with a count of downstream ports.
+    """
+
+    upstream_port: PlxDevice
+    downstream_port_count: int
+
+    @property
+    def device_name(self) -> str:
+        """Human-readable device name."""
+        return self.upstream_port.device_name
+
+    @property
+    def switch_info(self) -> SwitchIC | None:
+        """Get full switch IC information from the database."""
+        return self.upstream_port.switch_info
+
+    def format_display_name(self) -> str:
+        """Format device name with specs for display."""
+        return self.upstream_port.format_display_name()
+
+
+def discover_unique_switches() -> list[PlxSwitch]:
+    """Discover unique physical PCIe switches (not individual ports).
+
+    Groups switch ports by topology to identify unique physical switches.
+    The upstream port of each switch is identified by finding ports that
+    are alone on their bus segment (downstream ports share a bus).
+
+    Returns:
+        List of PlxSwitch objects, one per physical switch.
+    """
+    switches = discover_plx_switches()
+    if not switches:
+        return []
+
+    # Group switches by (domain, bus) to find ports sharing the same bus
+    from collections import defaultdict
+
+    by_bus: dict[tuple[int, int], list[PlxDevice]] = defaultdict(list)
+    for sw in switches:
+        by_bus[(sw.domain, sw.bus)].append(sw)
+
+    # Identify upstream ports: ports that are alone on their bus segment
+    # (or with only different device types), and whose bus has downstream ports
+    # pointing back to it.
+    #
+    # Heuristic: if a bus has only one PLX switch port, it's likely the upstream.
+    # If a bus has many PLX switch ports, they're downstream ports.
+    result: list[PlxSwitch] = []
+    processed_buses: set[tuple[int, int]] = set()
+
+    for (domain, bus), ports in sorted(by_bus.items()):
+        if (domain, bus) in processed_buses:
+            continue
+
+        if len(ports) == 1:
+            # Single port on this bus - likely an upstream port
+            upstream = ports[0]
+
+            # Look for downstream ports on a secondary bus
+            # The secondary bus is typically bus+1, but we check all buses
+            # to find ports of the same device type
+            downstream_count = 0
+            for (d2, b2), ports2 in by_bus.items():
+                if d2 == domain and b2 != bus:
+                    # Check if these are downstream ports of the same switch type
+                    matching = [
+                        p for p in ports2
+                        if p.vendor_id == upstream.vendor_id
+                        and p.device_id == upstream.device_id
+                    ]
+                    if matching and len(matching) == len(ports2):
+                        # All ports on this bus are the same type - downstream ports
+                        downstream_count += len(matching)
+                        processed_buses.add((d2, b2))
+
+            result.append(PlxSwitch(upstream, downstream_count))
+            processed_buses.add((domain, bus))
+        else:
+            # Multiple ports on this bus - these are downstream ports
+            # They should be associated with an upstream port we already found
+            # or will find. Skip for now.
+            pass
+
+    # Handle any remaining buses with multiple ports that weren't associated
+    # with an upstream port (shouldn't happen in normal topology)
+    for (domain, bus), ports in sorted(by_bus.items()):
+        if (domain, bus) in processed_buses:
+            continue
+        # Take the first port as representative
+        result.append(PlxSwitch(ports[0], len(ports) - 1))
+        processed_buses.add((domain, bus))
+
+    return sorted(result, key=lambda s: s.upstream_port.bdf)
 
 
 # --- Serial device discovery ---

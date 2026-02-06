@@ -7,7 +7,11 @@ from pathlib import Path
 import click
 
 from plxtools import __version__
-from plxtools.discovery import discover_plx_devices, discover_plx_switches
+from plxtools.discovery import (
+    discover_plx_devices,
+    discover_plx_switches,
+    discover_unique_switches,
+)
 
 
 @click.group()
@@ -24,15 +28,59 @@ def main(ctx: click.Context, json_output: bool) -> None:
 
 
 @main.command("list")
-@click.option("--all", "show_all", is_flag=True, help="Show all PLX devices, not just switches")
+@click.option("--ports", is_flag=True, help="Show all switch ports, not just unique switches")
+@click.option("--all", "show_all", is_flag=True, help="Show all PLX devices including non-switches")
 @click.pass_context
-def list_devices(ctx: click.Context, show_all: bool) -> None:
-    """List PLX switches in the system."""
-    if show_all:
-        devices = discover_plx_devices()
-    else:
-        devices = discover_plx_switches()
+def list_devices(ctx: click.Context, ports: bool, show_all: bool) -> None:
+    """List PLX switches in the system.
 
+    By default, shows unique physical switches. Use --ports to see all switch ports,
+    or --all to include non-switch PLX devices.
+    """
+    if show_all:
+        # Show all PLX devices (switches and endpoints)
+        devices = discover_plx_devices()
+        if ctx.obj["json"]:
+            output = []
+            for d in devices:
+                entry: dict[str, str | int | bool | None] = {
+                    "bdf": d.bdf,
+                    "vendor_id": f"0x{d.vendor_id:04X}",
+                    "device_id": f"0x{d.device_id:04X}",
+                    "device_name": d.device_name,
+                    "is_switch": d.is_switch,
+                }
+                if d.switch_info is not None:
+                    info = d.switch_info
+                    entry["pcie_gen"] = info.pcie_gen.value if info.pcie_gen else None
+                    entry["total_lanes"] = info.total_lanes
+                    entry["max_ports"] = info.max_ports
+                    entry["has_dma"] = info.has_dma
+                output.append(entry)
+            click.echo(json.dumps(output, indent=2))
+        else:
+            if not devices:
+                click.echo("No PLX devices found.")
+                return
+            click.echo(f"Found {len(devices)} PLX device(s):")
+            click.echo()
+            for device in devices:
+                switch_marker = " [switch]" if device.is_switch else ""
+                display_name = device.format_display_name()
+                click.echo(f"  {device.bdf}: {display_name}{switch_marker}")
+
+    elif ports:
+        # Show all switch ports
+        _list_switch_ports(ctx)
+
+    else:
+        # Default: show unique physical switches
+        _list_unique_switches(ctx)
+
+
+def _list_switch_ports(ctx: click.Context) -> None:
+    """List all switch ports."""
+    devices = discover_plx_switches()
     if ctx.obj["json"]:
         output = []
         for d in devices:
@@ -41,9 +89,7 @@ def list_devices(ctx: click.Context, show_all: bool) -> None:
                 "vendor_id": f"0x{d.vendor_id:04X}",
                 "device_id": f"0x{d.device_id:04X}",
                 "device_name": d.device_name,
-                "is_switch": d.is_switch,
             }
-            # Include switchdb metadata if available
             if d.switch_info is not None:
                 info = d.switch_info
                 entry["pcie_gen"] = info.pcie_gen.value if info.pcie_gen else None
@@ -54,16 +100,47 @@ def list_devices(ctx: click.Context, show_all: bool) -> None:
         click.echo(json.dumps(output, indent=2))
     else:
         if not devices:
-            click.echo("No PLX devices found.")
+            click.echo("No PLX switch ports found.")
             return
-
-        click.echo(f"Found {len(devices)} PLX device(s):")
+        click.echo(f"Found {len(devices)} switch port(s):")
         click.echo()
         for device in devices:
-            switch_marker = " [switch]" if device.is_switch else ""
-            # Show rich specs from switchdb if available
             display_name = device.format_display_name()
-            click.echo(f"  {device.bdf}: {display_name}{switch_marker}")
+            click.echo(f"  {device.bdf}: {display_name}")
+
+
+def _list_unique_switches(ctx: click.Context) -> None:
+    """List unique physical switches."""
+    switches = discover_unique_switches()
+    if ctx.obj["json"]:
+        output = []
+        for sw in switches:
+            d = sw.upstream_port
+            entry: dict[str, str | int | bool | None] = {
+                "bdf": d.bdf,
+                "vendor_id": f"0x{d.vendor_id:04X}",
+                "device_id": f"0x{d.device_id:04X}",
+                "device_name": sw.device_name,
+                "downstream_ports": sw.downstream_port_count,
+            }
+            if sw.switch_info is not None:
+                info = sw.switch_info
+                entry["pcie_gen"] = info.pcie_gen.value if info.pcie_gen else None
+                entry["total_lanes"] = info.total_lanes
+                entry["max_ports"] = info.max_ports
+                entry["has_dma"] = info.has_dma
+            output.append(entry)
+        click.echo(json.dumps(output, indent=2))
+    else:
+        if not switches:
+            click.echo("No PLX switches found.")
+            return
+        click.echo(f"Found {len(switches)} PLX switch(es):")
+        click.echo()
+        for sw in switches:
+            display_name = sw.format_display_name()
+            port_info = f" ({sw.downstream_port_count} downstream ports)"
+            click.echo(f"  {sw.upstream_port.bdf}: {display_name}{port_info}")
 
 
 @main.group()
